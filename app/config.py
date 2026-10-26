@@ -45,7 +45,7 @@ class Settings:
     planner: str = "auto"  # auto | rules | claude
     claude_model: str = "claude-opus-5-5"
     max_agent_steps: int = 8
-    tool_timeout_s: float = 2.0
+    tool_timeout_s: float = 1.0
     tool_max_attempts: int = 3
     tool_retry_backoff_s: float = 0.05
     api_keys: dict[str, tuple[str, str]] = field(default_factory=lambda: dict(DEFAULT_API_KEYS))

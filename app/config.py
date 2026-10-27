@@ -50,6 +50,7 @@ class Settings:
     tool_retry_backoff_s: float = 0.05
     api_keys: dict[str, tuple[str, str]] = field(default_factory=lambda: dict(DEFAULT_API_KEYS))
     allow_fault_injection: bool = True
+    log_level: str = "INFO"
 
     @classmethod
     def from_env(cls) -> "Settings":
@@ -69,5 +70,7 @@ class Settings:
             kwargs["tool_timeout_s"] = float(v)
         if v := env.get("CLOUDOPS_ALLOW_FAULT_INJECTION"):
             kwargs["allow_fault_injection"] = v.lower() in {"1", "true", "yes"}
+        if v := env.get("CLOUDOPS_LOG_LEVEL"):
+            kwargs["log_level"] = v.upper()
         kwargs["api_keys"] = _parse_api_keys(env.get("CLOUDOPS_API_KEYS"))
         return cls(**kwargs)

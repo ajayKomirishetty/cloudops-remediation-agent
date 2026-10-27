@@ -1,0 +1,193 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>CloudOps Remediation Agent</title>
+<style>
+  :root { --bg:#f6f7f9; --card:#fff; --fg:#1d2330; --muted:#667085; --line:#e4e7ec;
+          --accent:#2557d6; --ok:#137a3d; --warn:#a15c07; --bad:#b42318; }
+  * { box-sizing:border-box; }
+  body { margin:0; font:14px/1.45 system-ui,-apple-system,Segoe UI,sans-serif; background:var(--bg); color:var(--fg); }
+  header { display:flex; gap:12px; align-items:center; padding:12px 20px; background:var(--card); border-bottom:1px solid var(--line); flex-wrap:wrap; }
+  header h1 { font-size:16px; margin:0 auto 0 0; }
+  main { display:grid; grid-template-columns:340px 1fr; gap:16px; padding:16px 20px; max-width:1300px; margin:0 auto; }
+  @media (max-width:860px) { main { grid-template-columns:1fr; } }
+  .card { background:var(--card); border:1px solid var(--line); border-radius:8px; padding:14px; margin-bottom:16px; }
+  .card h2 { font-size:13px; text-transform:uppercase; letter-spacing:.04em; color:var(--muted); margin:0 0 10px; }
+  textarea, input[type=text], select { width:100%; font:inherit; padding:7px 9px; border:1px solid var(--line); border-radius:6px; }
+  textarea { min-height:70px; resize:vertical; }
+  button { font:inherit; padding:7px 14px; border-radius:6px; border:1px solid var(--accent); background:var(--accent); color:#fff; cursor:pointer; }
+  button.secondary { background:#fff; color:var(--bad); border-color:var(--bad); }
+  button:disabled { opacity:.5; cursor:not-allowed; }
+  .faults label { display:block; font-size:13px; color:var(--muted); }
+  .runs { list-style:none; margin:0; padding:0; }
+  .runs li { padding:8px; border-radius:6px; cursor:pointer; border:1px solid transparent; }
+  .runs li:hover, .runs li.active { background:#eef2fb; border-color:#d5def5; }
+  .runs .goal { white-space:nowrap; overflow:hidden; text-overflow:ellipsis; }
+  .meta { color:var(--muted); font-size:12px; }
+  .badge { display:inline-block; padding:1px 8px; border-radius:10px; font-size:12px; font-weight:600; background:#eef0f3; }
+  .s-awaiting_approval { background:#fff4e0; color:var(--warn); }
+  .s-completed { background:#e6f4ea; color:var(--ok); }
+  .s-failed, .s-blocked { background:#fdecea; color:var(--bad); }
+  .s-rejected { background:#eef0f3; color:var(--muted); }
+  table { width:100%; border-collapse:collapse; font-size:13px; }
+  th, td { text-align:left; padding:6px 8px; border-bottom:1px solid var(--line); vertical-align:top; }
+  th { color:var(--muted); font-weight:600; }
+  .finding { padding:6px 8px; border-left:3px solid var(--warn); background:#fffaf0; margin-bottom:6px; font-size:13px; }
+  .finding.k-guardrail, .finding.k-prompt_injection { border-color:var(--bad); background:#fff5f4; }
+  .step { font-family:ui-monospace,Menlo,monospace; font-size:12px; padding:4px 0; border-bottom:1px dashed var(--line); }
+  .step .err { color:var(--bad); }
+  .error { color:var(--bad); margin-top:8px; }
+  .summary { font-size:15px; margin:6px 0 12px; }
+  .row { display:flex; gap:8px; align-items:center; flex-wrap:wrap; }
+  .empty { color:var(--muted); }
+</style>
+</head>
+<body>
+<header>
+  <h1>CloudOps Remediation Agent</h1>
+  <label for="apiKey" class="meta">Signed in as</label>
+  <select id="apiKey" data-testid="api-key" style="width:auto">
+    <option value="operator-demo-key">bob (operator)</option>
+    <option value="viewer-demo-key">alice (viewer)</option>
+  </select>
+</header>
+<main>
+  <section>
+    <div class="card">
+      <h2>New run</h2>
+      <form id="runForm">
+        <textarea id="goal" data-testid="goal" maxlength="500" required>Find idle dev and staging VMs and propose stopping them to save cost.</textarea>
+        <div class="faults" id="faults" data-testid="faults"></div>
+        <div class="row" style="margin-top:10px"><button type="submit" id="startBtn" data-testid="start-run">Start run</button></div>
+        <div class="error" id="formError" data-testid="form-error" role="alert"></div>
+      </form>
+    </div>
+    <div class="card">
+      <h2>Recent runs</h2>
+      <ul class="runs" id="runs" data-testid="runs"></ul>
+    </div>
+  </section>
+  <section id="detail" data-testid="run-detail">
+    <div class="card empty">Start a run or pick one from the list.</div>
+  </section>
+</main>
+<script>
+const $ = (s) => document.querySelector(s);
+const esc = (v) => String(v ?? "").replace(/[&<>"']/g, (c) => ({"&":"&amp;","<":"&lt;",">":"&gt;",'"':"&quot;","'":"&#39;"}[c]));
+const clip = (s, n = 120) => (s.length > n ? s.slice(0, n) + "…" : s);
+let currentRun = null;
+
+async function api(path, opts = {}) {
+  const res = await fetch(path, { ...opts, headers: { "Content-Type": "application/json", "X-API-Key": $("#apiKey").value, ...(opts.headers || {}) } });
+  const body = await res.json().catch(() => ({}));
+  if (!res.ok) {
+    const d = body.detail;
+    throw new Error(Array.isArray(d) ? d.map((e) => e.msg).join("; ") : (d || res.statusText));
+  }
+  return body;
+}
+
+async function loadMeta() {
+  const meta = await (await fetch("/meta")).json();
+  $("#faults").innerHTML = meta.faults.length
+    ? "<div class='meta' style='margin-top:8px'>Inject faults (testing)</div>" +
+      meta.faults.map((f) => `<label><input type="checkbox" value="${esc(f)}" data-testid="fault-${esc(f)}"> ${esc(f)}</label>`).join("")
+    : "";
+}
+
+async function loadRuns() {
+  try {
+    const runs = await api("/runs");
+    $("#runs").innerHTML = runs.length ? runs.map((r) => `
+      <li data-id="${esc(r.run_id)}" class="${currentRun && currentRun.run_id === r.run_id ? "active" : ""}">
+        <div class="goal">${esc(r.goal)}</div>
+        <div class="meta"><span class="badge s-${esc(r.status)}">${esc(r.status)}</span> ${esc(r.created_by)} · ${new Date(r.created_at).toLocaleTimeString()}</div>
+      </li>`).join("") : "<li class='empty'>No runs yet.</li>";
+  } catch (e) { $("#runs").innerHTML = `<li class="error">${esc(e.message)}</li>`; }
+}
+
+function renderRun(run) {
+  currentRun = run;
+  const awaiting = run.status === "awaiting_approval";
+  const proposal = run.proposal.length ? `
+    <table data-testid="proposal">
+      <tr><th></th><th>Instance</th><th>Evidence</th><th>Reason</th><th>Savings/mo</th><th>Result</th></tr>
+      ${run.proposal.map((p) => `<tr data-testid="proposal-row">
+        <td><input type="checkbox" class="pick" value="${esc(p.instance_id)}" ${awaiting ? "checked" : "disabled"}></td>
+        <td><b>${esc(p.instance_id)}</b></td>
+        <td class="meta">avg ${esc(p.evidence.avg_cpu_pct)}% · max ${esc(p.evidence.max_cpu_pct)}% · net ${esc(p.evidence.network_mb)} MB<br>data ${esc(p.evidence.age_hours)}h old</td>
+        <td>${esc(p.reason)}</td>
+        <td>$${p.monthly_savings_usd.toFixed(2)}</td>
+        <td data-testid="result-${esc(p.instance_id)}">${esc(run.results[p.instance_id] || "")}</td>
+      </tr>`).join("")}
+    </table>` : "<p class='empty'>No actions proposed.</p>";
+
+  const approval = awaiting ? `
+    <div class="row" style="margin-top:12px">
+      <input type="text" id="comment" data-testid="comment" placeholder="Comment (optional)" maxlength="500" style="flex:1;min-width:200px">
+      <button id="approveBtn" data-testid="approve">Approve selected</button>
+      <button id="rejectBtn" class="secondary" data-testid="reject">Reject</button>
+    </div><div class="error" id="decideError" data-testid="decide-error" role="alert"></div>`
+    : run.approval ? `<p class="meta">${esc(run.approval.decision)} by ${esc(run.approval.decided_by)}${run.approval.comment ? ": " + esc(run.approval.comment) : ""}</p>` : "";
+
+  $("#detail").innerHTML = `
+    <div class="card">
+      <div class="row"><span class="badge s-${esc(run.status)}" data-testid="run-status">${esc(run.status)}</span>
+        <span class="meta">run ${esc(run.run_id)} · planner ${esc(run.planner || "-")} · ${esc(run.created_by)}${run.faults.length ? " · faults: " + esc(run.faults.join(", ")) : ""}</span></div>
+      <div class="summary" data-testid="run-summary">${esc(run.summary)}</div>
+      ${run.error ? `<div class="error">${esc(run.error)}</div>` : ""}
+      ${run.proposal_summary ? `<p class="meta" data-testid="planner-summary">Agent: ${esc(run.proposal_summary)}</p>` : ""}
+      <h2>Proposed actions (human approval required)</h2>
+      ${proposal}${approval}
+    </div>
+    <div class="card"><h2>Findings</h2>
+      <div data-testid="findings">${run.findings.length ? run.findings.map((f) => `<div class="finding k-${esc(f.kind)}"><b>${esc(f.kind)}</b> ${esc(f.message)}</div>`).join("") : "<span class='empty'>None.</span>"}</div>
+    </div>
+    <div class="card"><h2>Agent trace</h2>
+      ${run.steps.map((s) => `<div class="step">#${s.index} <b>${esc(s.type)}</b> ${esc(s.tool || "")}${s.input && Object.keys(s.input).length ? `<span class="meta">(${esc(clip(Object.entries(s.input).map(([k, v]) => `${k}=${typeof v === "string" ? v : JSON.stringify(v)}`).join(", ")))})</span>` : ""} ${s.attempts > 1 ? `(${s.attempts} attempts)` : ""} ${s.duration_ms != null ? esc(s.duration_ms) + "ms" : ""}
+        ${s.note ? "— " + esc(s.note) : ""} ${s.error ? `<span class="err">✗ ${esc(s.error)}</span>` : ""}</div>`).join("")}
+    </div>`;
+
+  if (awaiting) {
+    $("#approveBtn").onclick = () => decide("approve");
+    $("#rejectBtn").onclick = () => decide("reject");
+  }
+  loadRuns();
+}
+
+async function decide(decision) {
+  const ids = [...document.querySelectorAll(".pick:checked")].map((c) => c.value);
+  if (decision === "approve" && !ids.length) { $("#decideError").textContent = "Select at least one instance."; return; }
+  document.querySelectorAll("#approveBtn,#rejectBtn").forEach((b) => (b.disabled = true));
+  try {
+    renderRun(await api(`/runs/${currentRun.run_id}/approval`, { method: "POST",
+      body: JSON.stringify({ decision, instance_ids: decision === "approve" ? ids : null, comment: $("#comment").value }) }));
+  } catch (e) {
+    $("#decideError").textContent = e.message;
+    document.querySelectorAll("#approveBtn,#rejectBtn").forEach((b) => (b.disabled = false));
+  }
+}
+
+$("#runForm").onsubmit = async (ev) => {
+  ev.preventDefault();
+  $("#formError").textContent = "";
+  $("#startBtn").disabled = true; $("#startBtn").textContent = "Running…";
+  try {
+    const faults = [...document.querySelectorAll("#faults input:checked")].map((c) => c.value);
+    renderRun(await api("/runs", { method: "POST", body: JSON.stringify({ goal: $("#goal").value, faults }) }));
+  } catch (e) { $("#formError").textContent = e.message; }
+  finally { $("#startBtn").disabled = false; $("#startBtn").textContent = "Start run"; }
+};
+
+$("#runs").onclick = async (ev) => {
+  const li = ev.target.closest("li[data-id]");
+  if (li) renderRun(await api(`/runs/${li.dataset.id}`));
+};
+$("#apiKey").onchange = loadRuns;
+
+loadMeta(); loadRuns();
+</script>
+</body>
+</html>

@@ -21,6 +21,7 @@ dev = [
 
 [tool.pytest.ini_options]
 testpaths = ["tests"]
+pythonpath = ["."]
 markers = [
     "e2e: browser tests that start a live server (Playwright)",
 ]

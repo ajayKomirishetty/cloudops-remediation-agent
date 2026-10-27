@@ -26,12 +26,12 @@ class JsonFormatter(logging.Formatter):
 
 
 def configure_logging(level: str = "INFO") -> None:
+    logger.setLevel(level)
     if any(isinstance(h.formatter, JsonFormatter) for h in logger.handlers):
         return
     handler = logging.StreamHandler(sys.stderr)
     handler.setFormatter(JsonFormatter())
     logger.addHandler(handler)
-    logger.setLevel(level)
     logger.propagate = False
 
 

@@ -1,0 +1,43 @@
+# Scheduled: the expensive, non-deterministic checks. Full eval dataset against
+# the real model with repeated trials, compared against the last accepted
+# baseline, to catch model or prompt regressions that a single PR run would miss.
+name: nightly-evals
+
+on:
+  schedule:
+    - cron: "0 3 * * *"
+  workflow_dispatch:
+    inputs:
+      repeats:
+        description: Trials per case
+        default: "5"
+
+jobs:
+  claude-evals:
+    runs-on: ubuntu-latest
+    env:
+      ANTHROPIC_API_KEY: ${{ secrets.ANTHROPIC_API_KEY }}
+    steps:
+      - uses: actions/checkout@v4
+      - uses: astral-sh/setup-uv@v5
+        with:
+          enable-cache: true
+      - run: uv sync --locked
+      - name: Skip without API key
+        if: env.ANTHROPIC_API_KEY == ''
+        run: echo "::warning::ANTHROPIC_API_KEY not set; skipping Claude evals" && exit 0
+      - name: Claude evals, repeated trials, vs baseline
+        if: env.ANTHROPIC_API_KEY != ''
+        run: |
+          BASELINE=reports/evals/baseline-claude.json
+          ARGS="--planner claude --repeats ${{ inputs.repeats || '5' }} --min-pass-rate 0.9 --out reports/evals-nightly"
+          if [ -f "$BASELINE" ]; then ARGS="$ARGS --baseline $BASELINE"; fi
+          uv run python -m evals.run $ARGS
+      - name: Live-API pytest checks
+        if: env.ANTHROPIC_API_KEY != ''
+        run: uv run pytest -m llm
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: nightly-eval-report
+          path: reports/evals-nightly/

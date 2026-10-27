@@ -5,7 +5,9 @@ __pycache__/
 .coverage
 htmlcov/
 var/
-reports/screenshots/
+reports/screenshots/FAILED-*.png
+reports/evals-*/
+reports/evals/traces/
 reports/*.xml
 .env
 .DS_Store

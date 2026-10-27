@@ -73,7 +73,7 @@ class Orchestrator:
             current_run_id.reset(token)
 
     def _loop(self, state: RunState, planner: Planner, registry: ToolRegistry) -> None:
-        for turn in range(self.settings.max_agent_steps):
+        for _ in range(self.settings.max_agent_steps):
             try:
                 step = planner.next_step(state)
             except PlannerError as exc:

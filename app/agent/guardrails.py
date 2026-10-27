@@ -24,6 +24,13 @@ _INJECTION = re.compile(
     r"|^\s*system\s*:|you are now|act as (an? )?(admin|root))",
     re.I,
 )
+# Coarse topical filter: an off-topic goal is refused instead of silently
+# becoming a default dev/staging sweep.
+_IN_SCOPE = re.compile(
+    r"\b(idle|unused|underutili[sz]ed|wast\w*|cost\w*|sav(e|es|ing|ings)|spend\w*|stop\w*|vms?|instances?"
+    r"|servers?|compute|ec2|machines?|nodes?|remediat\w*)\b",
+    re.I,
+)
 
 
 @dataclass(frozen=True)
@@ -36,7 +43,10 @@ def check_goal(goal: str) -> Verdict:
     if _INJECTION.search(goal):
         return Verdict(False, "goal contains instruction-override text")
     if m := _DESTRUCTIVE.search(goal):
-        return Verdict(False, f"destructive operation '{m.group(1).lower()}' is not permitted; only stopping idle instances is supported")
+        return Verdict(False, f"destructive operation '{m.group(1).lower()}' is not permitted; "
+                              "only stopping idle instances is supported")
+    if not _IN_SCOPE.search(goal):
+        return Verdict(False, "goal is outside this agent's scope (finding and stopping idle instances to save cost)")
     return Verdict(True)
 
 

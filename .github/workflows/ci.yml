@@ -1,0 +1,58 @@
+# Runs on every PR and push to main. Deterministic only: no secrets, no network
+# calls to Claude, so it is fast, free, and can't flake on model variance.
+name: ci
+
+on:
+  pull_request:
+  push:
+    branches: [main]
+
+concurrency:
+  group: ci-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  lint-and-test:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: astral-sh/setup-uv@v5
+        with:
+          enable-cache: true
+      - run: uv sync --locked
+      - name: Lint
+        run: uv run ruff check .
+      - name: Unit, integration, API, data-validation and eval tests
+        run: >
+          uv run pytest -m "not e2e"
+          --junitxml=reports/junit.xml
+          --cov=app --cov=evals --cov-report=term --cov-report=xml:reports/coverage.xml
+      - name: Eval report (rules planner, must be 100% and match baseline)
+        run: uv run python -m evals.run --baseline reports/evals/baseline-rules.json --out reports/evals-ci
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: test-and-eval-reports
+          path: |
+            reports/junit.xml
+            reports/coverage.xml
+            reports/evals-ci/
+
+  e2e:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: astral-sh/setup-uv@v5
+        with:
+          enable-cache: true
+      - run: uv sync --locked
+      - run: uv run playwright install chromium --with-deps
+      - name: Browser test (Playwright, live server)
+        run: uv run pytest -m e2e --junitxml=reports/junit-e2e.xml
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: e2e-screenshots
+          path: |
+            reports/screenshots/
+            reports/junit-e2e.xml

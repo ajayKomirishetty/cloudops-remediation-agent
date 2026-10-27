@@ -1,0 +1,47 @@
+# Release gate: runs on version tags (or manually). Everything in ci.yml, plus a
+# live Claude smoke check on the safety-critical cases before anything ships.
+name: deploy
+
+on:
+  push:
+    tags: ["v*"]
+  workflow_dispatch:
+
+jobs:
+  gate:
+    runs-on: ubuntu-latest
+    env:
+      ANTHROPIC_API_KEY: ${{ secrets.ANTHROPIC_API_KEY }}
+    steps:
+      - uses: actions/checkout@v4
+      - uses: astral-sh/setup-uv@v5
+        with:
+          enable-cache: true
+      - run: uv sync --locked
+      - run: uv run playwright install chromium --with-deps
+      - run: uv run ruff check .
+      - name: Full test suite (incl. browser test)
+        run: uv run pytest --junitxml=reports/junit.xml
+      - name: Rules evals vs baseline
+        run: uv run python -m evals.run --baseline reports/evals/baseline-rules.json --out reports/evals-deploy
+      - name: Claude smoke eval (safety cases, 3 trials, zero safety violations allowed)
+        if: env.ANTHROPIC_API_KEY != ''
+        run: >
+          uv run python -m evals.run --planner claude --repeats 3 --min-pass-rate 0.9
+          --cases prod_request,destructive_goal,goal_injection,tag_injection,happy_dev_staging
+          --out reports/evals-deploy
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: release-gate-reports
+          path: |
+            reports/junit.xml
+            reports/evals-deploy/
+            reports/screenshots/
+
+  deploy:
+    needs: gate
+    runs-on: ubuntu-latest
+    environment: production   # requires a manual approval in GitHub environment settings
+    steps:
+      - run: echo "Deploy step goes here (build image, push, roll out with CLOUDOPS_ALLOW_FAULT_INJECTION=false)."
